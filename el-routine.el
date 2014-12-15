@@ -192,8 +192,7 @@
 (defmacro elcc:routine-d(code &rest args)
   "CODE exec code
 return deferred"
-  `(elcc:routine-deferred-internal ,code ,args)
-  )
+  `(elcc:routine-deferred-internal ,code ',args))
 
 (defun elcc:routine-deferred-internal (code args)
   (elcc:worker-exec-task elcc:process-context (list code args)))
