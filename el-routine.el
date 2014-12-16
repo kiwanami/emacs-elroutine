@@ -1,9 +1,11 @@
 ;;; el-routine.el --- concurrent processes
 
-;; Copyright (C) 2014  
+;; Copyright (C) 2014  SAKURAI Masashi
 
 ;; Author:  <m.sakurai at kiwanami.net>
-;; Keywords: lisp
+;; Keywords: lisp, concurrent
+;; Package-Requires: ((epc "0.1.1"))
+;; URL: https://github.com/kiwanami/emacs-elroutine
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -33,7 +35,6 @@
 ;;; Code:
 
 (require 'epc)
-(require 'epcs)
 
 
 ;;; Debug Utilities
@@ -65,18 +66,24 @@
 ;;  - status : symbol (init / running / waiting)
 (defstruct elcc:worker-instance id data status)
 
+;; [elcc:task]
+;;  - code     : a symbol or list of symbols, which can be evaluated by funcall
+;;  - args     : a list of argument objects
+;;  - deferred : a deferred object which is called after the task is done.
+(defstruct elcc:task code args deferred)
+
 ;; [elcc:worker-context]
 ;;  - max-num : maximum number of worker instances
 ;;  - workers : a list of elcc:worker-instance objects
 ;;  - create-func : worker creator function ( elcc:worker-instance -> d elcc:worker-instance )
 ;;  - delete-func : worker delete function  ( elcc:worker-instance -> d () )
-;;  - pass-func   : pass function ( worker -> task -> d () )
+;;  - pass-func   : pass function ( elcc:worker-instance -> elcc:task -> d () )
 ;;  - ondone-hook : a list of functions which is called after a task is finished.
 ;;  - queue   : a list for task queue
 (defstruct elcc:worker-context max-num workers create-func delete-func pass-func ondone-hook queue)
 
 (defun elcc:worker-create-context (num-workers create-func delete-func pass-func)
-  "Make a worker context."
+  "Make a worker context. This function returns a instance of `elcc:worker-context'."
   (when (or (null create-func) (null delete-func) (null pass-func))
     (error "Create/Delete/Pass function can not be null."))
   (when (> 1 num-workers)
@@ -84,12 +91,22 @@
   (make-elcc:worker-context 
    :max-num num-workers :create-func create-func :delete-func delete-func :pass-func pass-func))
 
-(defun elcc:worker-create-instance ()
-  "The worker creator function should call this function to create an instance."
+(defun elcc:worker-context-create-worker-instance ()
+  "[internal] Create a `elcc:worker-instance' object. This function is used at `elcc:worker-exec-task-gen'."
   (make-elcc:worker-instance :id (elcc:id-gen) :status 'init))
 
+(defun elcc:worker-context-delete-worker-instance (wctx worker)
+  "[internal] Remote the `elcc:worker-instance' object from the
+worker list and call the clean up function to dispose the
+instance. This function return a deferred object which is called
+when the deleting is done."
+  (setf (elcc:worker-context-workers wctx)
+        (remove worker (elcc:worker-context-workers wctx)))
+  (funcall (elcc:worker-context-delete-func wctx) worker))
+
 (defun elcc:worker-exec-task (wctx task)
-  "This function put the given task 
+  "Put the given task on the execution queue and return a deferred object 
+which is called after the task is done.
   WCTX is a `elcc:worker-context' instance. TASK is a function
   to execute, such as function symbol and lambda expression."
   (let ((d (deferred:new)))
@@ -99,7 +116,8 @@
     d))
 
 (defun elcc:worker-exec-task-gen (wctx)
-  "[internal] Initiate workers and pop a task and execute it."
+  "[internal] Dispatch tasks to some workers.
+This function initiate workers and pop a task and dispatch it to workers."
   (elcc:message "exec task gen")
   (if (elcc:worker-context-queue wctx)
       (lexical-let* 
@@ -126,7 +144,7 @@
           (elcc:message "task-gen : new worker %i" (length (elcc:worker-context-workers wctx)))
           (setf (elcc:worker-context-queue wctx) 
                 (nbutlast (elcc:worker-context-queue wctx)))
-          (lexical-let ((nworker (elcc:worker-create-instance)))
+          (lexical-let ((nworker (elcc:worker-context-create-worker-instance)))
             (setf (elcc:worker-context-workers wctx)
                   (cons nworker (elcc:worker-context-workers wctx)))
             (deferred:nextc
@@ -136,22 +154,25 @@
                 (elcc:worker-pass-task wctx nworker task dd)))))))))
 
 (defun elcc:worker-get-waiting-worker (wctx)
-  "[internal] "
+  "[internal] Return an idle worker or nil."
   (loop for i in (elcc:worker-context-workers wctx)
         if (eq 'waiting (elcc:worker-instance-status i))
         return i))
 
 (defun elcc:worker-pass-task (wctx worker task dd)
-  "[internal] "
+  "[internal] Manage the task execution. 
+This function is responsible to change the worker's status and to connect the 
+subsequent deferred object."
   (lexical-let ((wctx wctx) (worker worker) (task task) (dd dd))
-    (elcc:message "task start")
+    (elcc:message "task start : %i" (elcc:worker-instance-id worker))
     (setf (elcc:worker-instance-status worker) 'running)
     (deferred:$
       (deferred:try
         (funcall (elcc:worker-context-pass-func wctx) worker task)
+        ;; todo error catch
         :finally
         (lambda (x)
-          (elcc:message "task finished")
+          (elcc:message "task finished : %i" (elcc:worker-instance-id worker))
           (setf (elcc:worker-instance-status worker) 'waiting)
           (elcc:worker-ondone-task wctx worker)))
       (deferred:nextc it
@@ -160,8 +181,8 @@
           (deferred:callback-post dd x))))))
 
 (defun elcc:worker-ondone-task (wctx worker)
-  "[internal] "
-  (elcc:message "task ondone ")
+  "[internal] Try the remained task queue and call the done hook."
+  (elcc:message "task ondone : " (elcc:worker-instance-id worker))
   (lexical-let ((wctx wctx))
     (deferred:next
       (lambda () (elcc:worker-exec-task-gen wctx))))
@@ -172,29 +193,43 @@
 (defun elcc:worker-wait-all (wctx)
   "[Debug] Return the deferred object which waits for finishing all tasks."
   (cond
-   ((= (length (elcc:worker-context-queue wctx)) 0) 
+   ((= (length (elcc:worker-context-queue wctx)) 0)
     (deferred:succeed wctx))
    (t
     (lexical-let* 
         ((wctx wctx)
          (d (deferred:new))
          (hook (lambda (x) 
-                 (when (= (length (elcc:worker-context-queue wctx)) 0)
+                 (when (and (= (length (elcc:worker-context-queue wctx)) 0)
+                            (loop for w in (elcc:worker-context-workers wctx)
+                                  if (eq (elcc:worker-instance-status w) 'running)
+                                  return nil finally return t))
                    (setf (elcc:worker-context-ondone-hook wctx)
                          (remove hook (elcc:worker-context-ondone-hook wctx)))
                    (deferred:callback-post d)))))
       (push hook (elcc:worker-context-ondone-hook wctx))
       d))))
 
+(defun elcc:worker-context-delete-worker-all (wctx)
+  "Remote all workers from the worker list and dispose them. 
+This function return a deferred object which is called
+when the deleting is done."
+  (lexical-let ((workers (elcc:worker-context-workers wctx)))
+    (setf (elcc:worker-context-workers wctx) nil)
+    (deferred:parallel-list
+      (loop for w in workers
+            collect (funcall (elcc:worker-context-delete-func wctx) w)))))
+
 
 ;;; elroutine API
 
 (defmacro elcc:routine-d(code &rest args)
-  "CODE exec code
-return deferred"
+  "Execute the given code with the arguments and return the deferred object
+for the result."
   `(elcc:routine-deferred-internal ,code ',args))
 
 (defun elcc:routine-deferred-internal (code args)
+  "[internal] Glue code."
   (elcc:worker-exec-task elcc:process-context (list code args)))
 
 
@@ -228,7 +263,6 @@ return deferred"
 (elcc:init-process)
 
 ;;; demo code
-
 
 (defun elcc:demo ()
   (interactive)

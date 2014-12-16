@@ -21,6 +21,7 @@
 
 (require 'el-routine)
 
+
 ;;; async test framework
 
 (defmacro elcc:debug (d msg &rest args)
@@ -91,9 +92,7 @@ value. "
                (deferred:next 
                  (lambda ()
                    (push 'post-create trace-syms))))
-              (lambda (w) 
-                (push 'delete trace-syms)
-                (deferred:succeed))
+              (lambda () )
               (lambda (worker task) 
                 (push 'pass trace-syms)
                 (funcall task)
@@ -117,12 +116,181 @@ value. "
                '(init pre-create post-create pass exec-task pass-end ondone)
                trace-syms) trace-syms))))))
 
+;; (elcc:debug (elcc:test-worker-basic) "basic : %s" x)
+
+(defun elcc:test-worker-basic-single-2task ()
+  (lexical-let*
+      ((trace-syms '(init))
+       (ctx (elcc:worker-create-context
+             1 
+             (lambda (worker) 
+               (push 'pre-create trace-syms)
+               (deferred:next 
+                 (lambda ()
+                   (push 'post-create trace-syms))))
+              (lambda () )
+              (lambda (worker task) 
+                (push 'pass trace-syms)
+                (funcall task)
+                (deferred:next 
+                  (lambda () 
+                    (push 'pass-end trace-syms))))
+              )))
+    (push (lambda () 
+            (push 'ondone trace-syms))
+          (elcc:worker-context-ondone-hook ctx))
+    (deferred:$
+      (deferred:parallel 
+        (elcc:worker-exec-task ctx (lambda () (push 'exec-task1 trace-syms)))
+        (elcc:worker-exec-task ctx (lambda () (push 'exec-task2 trace-syms))))
+      (deferred:nextc it
+        (lambda () 
+          (elcc:worker-wait-all ctx)))
+      (deferred:nextc it
+        (lambda () 
+          (setq trace-syms (reverse trace-syms))
+          (or (equal
+               '(init pre-create post-create pass exec-task1 pass-end ondone pass exec-task2 pass-end ondone)
+               trace-syms) trace-syms))))))
+
+;; (elcc:debug (elcc:test-worker-basic-single-2task) "single-2task : %s" x)
+
+
+(defun elcc:test-worker-basic-delete ()
+  (lexical-let*
+      ((trace-syms '(init))
+       (ctx (elcc:worker-create-context
+             1 
+             (lambda (worker) 
+               (push 'pre-create trace-syms)
+               (deferred:next 
+                 (lambda ()
+                   (push 'post-create trace-syms))))
+              (lambda (w) 
+                (push 'delete trace-syms)
+                (deferred:succeed))
+              (lambda (worker task) 
+                (push 'pass trace-syms)
+                (funcall task)
+                (deferred:next 
+                  (lambda () 
+                    (push 'pass-end trace-syms))))
+              )))
+    (push (lambda () 
+            (push 'ondone trace-syms))
+          (elcc:worker-context-ondone-hook ctx))
+    (deferred:$
+      (elcc:worker-exec-task ctx (lambda () (push 'exec-task trace-syms)))
+      (deferred:nextc it
+        (lambda () (elcc:worker-wait-all ctx)))
+      (deferred:nextc it
+        (lambda () (elcc:worker-context-delete-worker-instance ctx (car (elcc:worker-context-workers ctx)))))
+      (deferred:nextc it
+        (lambda () 
+          (push (length (elcc:worker-context-workers ctx)) trace-syms)
+          (setq trace-syms (reverse trace-syms))
+          (or (equal
+               '(init pre-create post-create pass exec-task pass-end ondone delete 0)
+               trace-syms) trace-syms))))))
+
+;; (elcc:debug (elcc:test-worker-basic-delete) "delete : %s" x)
+
+(defun elcc:test-worker-basic-3workers-delete ()
+  (lexical-let*
+      ((trace-syms '(init))
+       (ctx (elcc:worker-create-context
+             3 
+             (lambda (worker) 
+               (push 'pre-create trace-syms)
+               (deferred:next 
+                 (lambda ()
+                   (push 'post-create trace-syms))))
+              (lambda (w) 
+                (push 'delete trace-syms)
+                (deferred:succeed))
+              (lambda (worker task) 
+                (push 'pass trace-syms)
+                (funcall task)
+                (deferred:next 
+                  (lambda () 
+                    (push 'pass-end trace-syms))))
+              )))
+    (push (lambda () 
+            (push 'ondone trace-syms))
+          (elcc:worker-context-ondone-hook ctx))
+    (deferred:$
+      (deferred:parallel
+        (elcc:worker-exec-task ctx (lambda () (push 'exec-task1 trace-syms)))
+        (elcc:worker-exec-task ctx (lambda () (push 'exec-task2 trace-syms)))
+        (elcc:worker-exec-task ctx (lambda () (push 'exec-task3 trace-syms))))
+      (deferred:nextc it
+        (lambda () (elcc:worker-wait-all ctx)))
+      (deferred:nextc it
+        (lambda () (elcc:worker-context-delete-worker-instance ctx (cadr (elcc:worker-context-workers ctx)))))
+      (deferred:nextc it
+        (lambda () 
+          (push (length (elcc:worker-context-workers ctx)) trace-syms)
+          (setq trace-syms (reverse trace-syms))
+          (or (equal
+               '(init pre-create pre-create pre-create 
+                      post-create post-create post-create 
+                      pass exec-task1 
+                      pass exec-task2 
+                      pass exec-task3 
+                      pass-end pass-end pass-end 
+                      ondone ondone ondone
+                      delete 2)
+               trace-syms) trace-syms))))))
+
+;; (elcc:debug (elcc:test-worker-basic-3workers-delete) "3workers-delete : %s" x)
+
+(defun elcc:test-worker-basic-delete-all ()
+  (lexical-let*
+      ((trace-syms '(init))
+       (ctx (elcc:worker-create-context
+             4 
+             (lambda (worker) 
+               (push 'pre-create trace-syms)
+               (deferred:wait 10))
+             (lambda (w) 
+               (push 'delete trace-syms)
+               (deferred:wait 10))
+             (lambda (worker task)
+               (push 'pass trace-syms)
+               (deferred:wait 10)))))
+    (deferred:$
+      (deferred:parallel-list
+        (loop for i from 0 below 4
+              collect (elcc:worker-exec-task ctx (lambda () ))))
+      (deferred:nextc it
+        (lambda () (elcc:worker-wait-all ctx)))
+      (deferred:nextc it
+        (lambda () (elcc:worker-context-delete-worker-all ctx )))
+      (deferred:nextc it
+        (lambda () 
+          (push (length (elcc:worker-context-workers ctx)) trace-syms)
+          (setq trace-syms (reverse trace-syms))
+          (or (equal
+               '(init 
+                 pre-create pre-create pre-create pre-create 
+                 pass pass pass pass 
+                 delete delete delete delete 0)
+               trace-syms) trace-syms))))))
+
+;; (elcc:debug (elcc:test-worker-basic-delete-all) "delete-all : %s" x)
+
+
+
+;;; tests for process module
+
+
+
 
 
 (defun elcc:test-all ()
   (interactive)
   (elcc:run-tests
-   '(elcc:test-worker-basic)
+   '(elcc:test-worker-basic elcc:test-worker-basic-single-2task)
    ))
 
 ;; (progn (eval-current-buffer) (elcc:test-all))
