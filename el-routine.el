@@ -252,40 +252,46 @@ for the result."
   (elcc:worker-exec-task elcc:process-context (list code args)))
 
 
-(defvar elcc:process-max-number 2
-  "Maximum number of epc processes.")
-
-(defvar elcc:process-context nil)
+(defvar elcc:global-process-context nil "[internal] Worker context instance ")
 
 (defun elcc:create-process-d ()
   "return D epc"
   (epc:start-epc-deferred "emacs" (list "-batch" "-L" "." "-l" "el-routine-slaves.el" (format "%S" load-path))))
 
-(defun elcc:init-process ()
-  (setq elcc:process-context 
-        (elcc:worker-create-context 
-         elcc:process-max-number
-         (lambda (worker)
-           (lexical-let ((worker worker))
-             (deferred:nextc
-               (elcc:create-process-d)
-               (lambda (epc) 
-                 (elcc:message "create epc")
-                 (setf (elcc:worker-instance-data worker) epc)))))
-         (lambda (worker) 
-           (let ((epc (elcc:worker-instance-data worker)))
-             (deferred:succeed (epc:stop-epc epc))))
-         (lambda (worker task)
-           (lexical-let ((epc (elcc:worker-instance-data worker)))
-             (epc:call-deferred epc 'exec task))))))
+(defun elcc:global-init-process (max-worker-num)
+  "Initialize a global worker context and return the deferred object."
+  (deferred:$
+    (if elcc:global-process-context
+        (elcc:worker-context-delete-worker-all elcc:global-process-context)
+      (deferred:succeed))
+    (deferred:nextc it
+      (lambda () 
+        (setq elcc:global-process-context
+              (elcc:worker-create-context 
+               max-worker-num
+               (lambda (worker)
+                 (lexical-let ((worker worker))
+                   (deferred:nextc
+                     (elcc:create-process-d)
+                     (lambda (epc) 
+                       (elcc:message "create epc")
+                       (setf (elcc:worker-instance-data worker) epc)))))
+               (lambda (worker) 
+                 (let ((epc (elcc:worker-instance-data worker)))
+                   (deferred:succeed (epc:stop-epc epc))))
+               (lambda (worker task)
+                 (lexical-let ((epc (elcc:worker-instance-data worker)))
+                   (epc:call-deferred epc 'exec task)))))))))
 
-(elcc:init-process)
+;; initialize global worker context
+(elcc:global-init-process 2)
 
 ;;; demo code
 
 (defun elcc:demo ()
   (interactive)
   (lexical-let
+      ;; Fibonacci number function
       ((code '(lambda (x) 
                 (let* ((f (lambda (f xx) 
                             (if (> 2 xx) 1 
@@ -300,8 +306,9 @@ for the result."
       (lambda (xs) 
         (message "Result: (time %s) %S " (- (float-time) begin-time) xs)))))
 
+;; (eval-current-buffer)
 ;; (elcc:demo)
-;; (length (elcc:worker-context-workers elcc:process-context))
+;; (length (elcc:worker-context-workers elcc:global-process-context))
 
 
 
