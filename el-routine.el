@@ -220,6 +220,23 @@ when the deleting is done."
       (loop for w in workers
             collect (funcall (elcc:worker-context-delete-func wctx) w)))))
 
+(defun elcc:worker-context-report-status (wctx)
+  "Report the worker status on the echo message."
+  (loop with num-run = 0
+        with num-wait = 0
+        with workers = (elcc:worker-context-workers wctx)
+        for w in workers
+        for st = (elcc:worker-instance-status w)
+        when (eq 'waiting st) do (incf num-wait)
+        when (eq 'running st) do (incf num-run)
+        finally return
+        (message "elcc:workers  %i/%i  run:%i  wait:%i"
+                 (length workers)
+                 (elcc:worker-context-max-num wctx)
+                 num-run num-wait)))
+
+;; (elcc:worker-context-report-status elcc:global-process-context)
+
 
 ;;; elroutine API
 
