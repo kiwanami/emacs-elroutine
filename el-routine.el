@@ -1,6 +1,6 @@
 ;;; el-routine.el --- concurrent processes
 
-;; Copyright (C) 2014  SAKURAI Masashi
+;; Copyright (C) 2014, 2015  SAKURAI Masashi
 
 ;; Author:  <m.sakurai at kiwanami.net>
 ;; Keywords: lisp, concurrent

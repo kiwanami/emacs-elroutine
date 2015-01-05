@@ -1,6 +1,6 @@
 ;;; test code for el-routine.el
 
-;; Copyright (C) 2014  SAKURAI Masashi
+;; Copyright (C) 2014, 2015  SAKURAI Masashi
 ;; Author: SAKURAI Masashi <m.sakurai at kiwanami.net>
 
 ;; This program is free software; you can redistribute it and/or modify
