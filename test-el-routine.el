@@ -290,7 +290,12 @@ value. "
 (defun elcc:test-all ()
   (interactive)
   (elcc:run-tests
-   '(elcc:test-worker-basic elcc:test-worker-basic-single-2task)
+   '(elcc:test-worker-basic 
+     elcc:test-worker-basic-single-2task
+     elcc:test-worker-basic-delete
+     elcc:test-worker-basic-3workers-delete
+     elcc:test-worker-basic-delete-all
+     )
    ))
 
 ;; (progn (eval-current-buffer) (elcc:test-all))
