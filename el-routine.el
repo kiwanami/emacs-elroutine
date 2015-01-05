@@ -183,12 +183,14 @@ subsequent deferred object."
 (defun elcc:worker-ondone-task (wctx worker)
   "[internal] Try the remained task queue and call the done hook."
   (elcc:message "task ondone : " (elcc:worker-instance-id worker))
-  (lexical-let ((wctx wctx))
-    (deferred:next
-      (lambda () (elcc:worker-exec-task-gen wctx))))
-  (loop for f in (elcc:worker-context-ondone-hook wctx)
-        do (ignore-errors 
-             (funcall f))))
+  (deferred:nextc
+    (lexical-let ((wctx wctx))
+      (deferred:next
+        (lambda () (elcc:worker-exec-task-gen wctx))))
+    (lambda () 
+      (deferred:parallel-list
+        (loop for f in (elcc:worker-context-ondone-hook wctx)
+              collect (lambda () (ignore-errors (funcall f))))))))
 
 (defun elcc:worker-wait-all (wctx)
   "[Debug] Return the deferred object which waits for finishing all tasks."
